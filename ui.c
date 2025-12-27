@@ -26,6 +26,12 @@ static int is_searching = 0;
 static int pending_g = 0;  // for vim-style 'gg' navigation
 static int show_cpu_cores = 0;
 static int show_process_details = 0;
+static int mem_in_mb = 0;          // 0 for KB, 1 for MB
+static int show_help = 0;          // for help menu popup
+static int show_kill_confirm = 0;  // for kill confirmation popup
+static pid_t kill_confirm_pid = 0;  // PID to kill if confirmed
+static char kill_confirm_name[64]; // Name of process to kill if confirmed
+static int kill_confirm_selected = 0; // 0 for Yes, 1 for No
 
 // color pair macros - each theme gets 4 pairs
 #define PAIR_HEADER(t) (1 + (t)*4)
@@ -83,13 +89,13 @@ void init_ui() {
     init_pair(PAIR_BORDER(THEME_GRUVBOX), COLOR_RED, -1);
     
     init_pair(PAIR_HEADER(THEME_NORD), COLOR_BLACK, COLOR_CYAN);
-    init_pair(PAIR_SELECT(THEME_NORD), COLOR_WHITE, COLOR_BLUE);
-    init_pair(PAIR_BG(THEME_NORD), COLOR_CYAN, COLOR_BLUE);
+    init_pair(PAIR_SELECT(THEME_NORD), COLOR_BLACK, COLOR_WHITE);
+    init_pair(PAIR_BG(THEME_NORD), COLOR_WHITE, COLOR_BLACK);
     init_pair(PAIR_BORDER(THEME_NORD), COLOR_CYAN, -1);
     
     init_pair(PAIR_HEADER(THEME_CATPPUCCIN), COLOR_BLACK, COLOR_MAGENTA);
-    init_pair(PAIR_SELECT(THEME_CATPPUCCIN), COLOR_WHITE, COLOR_BLUE);
-    init_pair(PAIR_BG(THEME_CATPPUCCIN), COLOR_MAGENTA, COLOR_BLUE);
+    init_pair(PAIR_SELECT(THEME_CATPPUCCIN), COLOR_BLACK, COLOR_CYAN);
+    init_pair(PAIR_BG(THEME_CATPPUCCIN), COLOR_WHITE, COLOR_BLACK);
     init_pair(PAIR_BORDER(THEME_CATPPUCCIN), COLOR_MAGENTA, -1);
     
     init_pair(PAIR_HEADER(THEME_TOKYO_NIGHT), COLOR_WHITE, COLOR_BLUE);
@@ -106,6 +112,11 @@ void init_ui() {
     init_pair(PAIR_GAUGE_LOW, COLOR_GREEN, -1);
     init_pair(PAIR_GAUGE_MID, COLOR_YELLOW, -1);
     init_pair(PAIR_GAUGE_HIGH, COLOR_RED, -1);
+
+    // Extra pairs for the confirmation popup
+    init_pair(60, COLOR_RED, -1);    // Selected action
+    init_pair(61, COLOR_WHITE, -1);  // Inactive action
+    init_pair(62, COLOR_BLACK, COLOR_RED); // Focused button (filled)
 }
 
 void cleanup_ui() {
@@ -167,12 +178,151 @@ void draw_box(int y, int x, int h, int w, int color_pair, const char *title) {
     attroff(COLOR_PAIR(color_pair));
 }
 
+// draws a confirmation popup in the center of the screen
+void draw_kill_confirm_popup(pid_t pid, const char *process_name) {
+    int height, width;
+    getmaxyx(stdscr, height, width);
+    
+    // popup dimensions - bigger to fit the new style
+    int popup_h = 10;
+    int popup_w = 54;
+    int popup_y = (height - popup_h) / 2;
+    int popup_x = (width - popup_w) / 2;
+    
+    // fill background with a shadow-like effect or just solid
+    attron(COLOR_PAIR(PAIR_BG(current_theme)));
+    for (int i = 0; i < popup_h; i++) {
+        mvhline(popup_y + i, popup_x, ' ', popup_w);
+    }
+    attroff(COLOR_PAIR(PAIR_BG(current_theme)));
+    
+    // Draw the main border (reddish/orange)
+    draw_box(popup_y, popup_x, popup_h, popup_w, PAIR_GAUGE_HIGH, "SIGKILL");
+    
+    // Center text lines
+    char line1[128], line2[128];
+    snprintf(line1, sizeof(line1), "Send signal: 9 (SIGKILL)");
+    snprintf(line2, sizeof(line2), "To PID: %d (%s)", pid, process_name);
+    
+    int line1_x = popup_x + (popup_w - (int)strlen(line1)) / 2;
+    int line2_x = popup_x + (popup_w - (int)strlen(line2)) / 2;
+    
+    // Draw Line 1 with highlight on '9'
+    mvprintw(popup_y + 2, line1_x, "Send signal: ");
+    attron(COLOR_PAIR(60) | A_BOLD);
+    printw("9");
+    attroff(COLOR_PAIR(60) | A_BOLD);
+    printw(" (SIGKILL)");
+    
+    // Draw Line 2 with highlight on PID
+    mvprintw(popup_y + 3, line2_x, "To PID: ");
+    attron(COLOR_PAIR(60) | A_BOLD);
+    printw("%d", pid);
+    attroff(COLOR_PAIR(60) | A_BOLD);
+    printw(" (%s)", process_name);
+    
+    // Draw Buttons
+    int btn_w = 14;
+    int btn_h = 3;
+    int btn_spacing = 4;
+    int total_btns_w = (btn_w * 2) + btn_spacing;
+    int btns_start_x = popup_x + (popup_w - total_btns_w) / 2;
+    int btns_y = popup_y + 5;
+    
+    // "Yes" Button
+    if (kill_confirm_selected == 0) {
+        // Draw filled background for selected button
+        attron(COLOR_PAIR(62));
+        for (int i = 0; i < btn_h - 2; i++) {
+            mvhline(btns_y + 1 + i, btns_start_x + 1, ' ', btn_w - 2);
+        }
+        mvprintw(btns_y + 1, btns_start_x + (btn_w - 3) / 2, "Yes");
+        attroff(COLOR_PAIR(62));
+        draw_box(btns_y, btns_start_x, btn_h, btn_w, PAIR_GAUGE_HIGH, NULL);
+    } else {
+        draw_box(btns_y, btns_start_x, btn_h, btn_w, 61, NULL);
+        mvprintw(btns_y + 1, btns_start_x + (btn_w - 3) / 2, "Yes");
+    }
+    
+    // "No" Button
+    if (kill_confirm_selected == 1) {
+        // Draw filled background for selected button
+        attron(COLOR_PAIR(62));
+        for (int i = 0; i < btn_h - 2; i++) {
+            mvhline(btns_y + 1 + i, btns_start_x + btn_w + btn_spacing + 1, ' ', btn_w - 2);
+        }
+        mvprintw(btns_y + 1, btns_start_x + btn_w + btn_spacing + (btn_w - 2) / 2, "No");
+        attroff(COLOR_PAIR(62));
+        draw_box(btns_y, btns_start_x + btn_w + btn_spacing, btn_h, btn_w, PAIR_GAUGE_HIGH, NULL);
+    } else {
+        draw_box(btns_y, btns_start_x + btn_w + btn_spacing, btn_h, btn_w, 61, NULL);
+        mvprintw(btns_y + 1, btns_start_x + btn_w + btn_spacing + (btn_w - 2) / 2, "No");
+    }
+}
+
+// draws a help menu popup in the center of the screen
+void draw_help_menu() {
+    int height, width;
+    getmaxyx(stdscr, height, width);
+    
+    int popup_h = 16;
+    int popup_w = 70; // Wider to accommodate two columns
+    int popup_y = (height - popup_h) / 2;
+    int popup_x = (width - popup_w) / 2;
+    
+    attron(COLOR_PAIR(PAIR_BG(current_theme)));
+    for (int i = 0; i < popup_h; i++) {
+        mvhline(popup_y + i, popup_x, ' ', popup_w);
+    }
+    attroff(COLOR_PAIR(PAIR_BG(current_theme)));
+    
+    draw_box(popup_y, popup_x, popup_h, popup_w, PAIR_BORDER(current_theme), "Help Menu");
+    
+    int ty = popup_y + 2;
+    int col1_x = popup_x + 3;
+    int col2_x = popup_x + 35; // Start of second column
+    
+    // Column 1: Navigation
+    attron(A_BOLD | COLOR_PAIR(PAIR_HEADER(current_theme)));
+    mvprintw(ty, col1_x, "Navigation");
+    attroff(A_BOLD | COLOR_PAIR(PAIR_HEADER(current_theme)));
+    
+    int curr_y = ty + 2;
+    mvprintw(curr_y++, col1_x, "j, Down : Scroll Down");
+    mvprintw(curr_y++, col1_x, "k, Up   : Scroll Up");
+    mvprintw(curr_y++, col1_x, "gg      : Jump to Top");
+    mvprintw(curr_y++, col1_x, "G       : Jump to Bottom");
+    mvprintw(curr_y++, col1_x, "h, l    : Select Button");
+    
+    // Column 2: Actions
+    attron(A_BOLD | COLOR_PAIR(PAIR_HEADER(current_theme)));
+    mvprintw(ty, col2_x, "Actions");
+    attroff(A_BOLD | COLOR_PAIR(PAIR_HEADER(current_theme)));
+    
+    curr_y = ty + 2;
+    mvprintw(curr_y++, col2_x, "K     : Kill (SIGKILL)");
+    mvprintw(curr_y++, col2_x, "/     : Search/Filter");
+    mvprintw(curr_y++, col2_x, "Enter : Toggle Details");
+    mvprintw(curr_y++, col2_x, "M     : Memory unit");
+    mvprintw(curr_y++, col2_x, "t     : Cycle Theme");
+    mvprintw(curr_y++, col2_x, "1     : CPU Core View");
+    mvprintw(curr_y++, col2_x, "c,m,p : Sort Mode");
+    mvprintw(curr_y++, col2_x, "H     : Toggle Help");
+    mvprintw(curr_y++, col2_x, "q,ESC : Quit/Back");
+    
+    attron(A_DIM);
+    mvprintw(popup_y + popup_h - 2, popup_x + (popup_w - 22) / 2, "-- Press H to close --");
+    attroff(A_DIM);
+}
+
+
 void draw_ui(ProcessList *list, int selected_index, int scroll_offset, SystemInfo *sys_info) {
     int height, width;
     getmaxyx(stdscr, height, width);
 
     bkgd(COLOR_PAIR(PAIR_BG(current_theme)));
     erase();
+
     
     int dash_h = 12;  // dashboard height
     int col_w = width / 3;
@@ -252,7 +402,8 @@ void draw_ui(ProcessList *list, int selected_index, int scroll_offset, SystemInf
     
     // table header
     attron(A_BOLD | COLOR_PAIR(PAIR_HEADER(current_theme)));
-    mvprintw(list_start_y, 0, "%-8s %-12s %-10s %-10s %-10s %-10s %s", " PID", " PROG", " USER", " MEM (KB)", " CPU (%)", " STATE", " COMMAND");
+    mvprintw(list_start_y, 0, "%-8s %-12s %-10s %-10s %-10s %-10s %s", 
+             " PID", " PROG", " USER", mem_in_mb ? " MEM (MB)" : " MEM (KB)", " CPU (%)", " STATE", " COMMAND");
     attroff(A_BOLD | COLOR_PAIR(PAIR_HEADER(current_theme)));
     
     // process rows
@@ -297,8 +448,13 @@ void draw_ui(ProcessList *list, int selected_index, int scroll_offset, SystemInf
         display_name[12] = '\0';
 
         char line_buf[512];
-        snprintf(line_buf, sizeof(line_buf), " %-8d %-12s %-10s %-10lu %-10.1f %-10c %s", 
-                 p->pid, display_name, p->user, p->memory_sq, p->cpu_usage, p->state, display_cmd);
+        if (mem_in_mb) {
+            snprintf(line_buf, sizeof(line_buf), " %-8d %-12s %-10s %-10.1f %-10.1f %-10c %s", 
+                     p->pid, display_name, p->user, (float)p->memory_sq / 1024.0f, p->cpu_usage, p->state, display_cmd);
+        } else {
+            snprintf(line_buf, sizeof(line_buf), " %-8d %-12s %-10s %-10lu %-10.1f %-10c %s", 
+                     p->pid, display_name, p->user, p->memory_sq, p->cpu_usage, p->state, display_cmd);
+        }
         
         mvaddnstr(list_start_y + 1 + i, 0, line_buf, list_width);
         
@@ -333,7 +489,11 @@ void draw_ui(ProcessList *list, int selected_index, int scroll_offset, SystemInf
              mvprintw(ty++, tx, "Prior/Nice: %d / %d", sel->priority, sel->nice);
              
              ty++;
-             mvprintw(ty++, tx, "Memory: %lu KB", sel->memory_sq);
+             if (mem_in_mb) {
+                 mvprintw(ty++, tx, "Memory: %.1f MB", (float)sel->memory_sq / 1024.0f);
+             } else {
+                 mvprintw(ty++, tx, "Memory: %lu KB", sel->memory_sq);
+             }
              mvprintw(ty++, tx, "CPU: %.1f%%", sel->cpu_usage);
              
              ty++;
@@ -377,8 +537,16 @@ void draw_ui(ProcessList *list, int selected_index, int scroll_offset, SystemInf
     } else if (list->filter[0] != '\0') {
          printw("Filter: %s (Esc to clear) | Found: %d", list->filter, list->count);
     } else {
-         printw("Total: %d | Sort: %s | Theme: %s | /:Search | q:Quit | t:Theme | K:Kill | j/k: Nav", 
+         printw("Total: %d | Sort: %s | Theme: %s | /:Search | q:Quit | H:Help | t:Theme | M:MemUnit | K:Kill", 
                  list->count, sort_str, theme_str);
+    }
+    
+    if (show_kill_confirm) {
+        draw_kill_confirm_popup(kill_confirm_pid, kill_confirm_name);
+    }
+    
+    if (show_help) {
+        draw_help_menu();
     }
     
     refresh();
@@ -427,6 +595,34 @@ int handle_input(int ch, ProcessList *list, int *selected_index, int *scroll_off
             return ACTION_REDRAW;
         }
         pending_g = 0;
+        return ACTION_NONE;
+    }
+
+    // kill confirmation input handling
+    if (show_kill_confirm) {
+        if (ch == 'y' || ch == 'Y' || (ch == '\n' && kill_confirm_selected == 0)) {
+            kill(kill_confirm_pid, 9); // SIGKILL
+            show_kill_confirm = 0;
+            return ACTION_REFRESH;
+        } else if (ch == 'n' || ch == 'N' || ch == 27 || (ch == '\n' && kill_confirm_selected == 1)) {
+            show_kill_confirm = 0;
+            return ACTION_REDRAW;
+        } else if (ch == KEY_LEFT || ch == 'h') {
+            kill_confirm_selected = 0;
+            return ACTION_REDRAW;
+        } else if (ch == KEY_RIGHT || ch == 'l') {
+            kill_confirm_selected = 1;
+            return ACTION_REDRAW;
+        }
+        return ACTION_NONE;
+    }
+
+    // help menu input handling
+    if (show_help) {
+        if (ch == 'h' || ch == 'H' || ch == 27 || ch == 'q') {
+            show_help = 0;
+            return ACTION_REDRAW;
+        }
         return ACTION_NONE;
     }
 
@@ -488,6 +684,10 @@ int handle_input(int ch, ProcessList *list, int *selected_index, int *scroll_off
                 *scroll_offset = 0;
             }
             return ACTION_REDRAW;
+        case 'h':
+        case 'H':
+            show_help = !show_help;
+            return ACTION_REDRAW;
         case KEY_UP:
         case 'k':
             if (*selected_index > 0) {
@@ -508,12 +708,19 @@ int handle_input(int ch, ProcessList *list, int *selected_index, int *scroll_off
                 return ACTION_REDRAW;
             }
             break;
-        case 'K':  // kill process
+        case 'K':  // kill process confirmation
             if (list->count > 0 && *selected_index < list->count) {
-                 kill(list->processes[*selected_index].pid, 15);  // SIGTERM
-                 return ACTION_REFRESH;
+                 kill_confirm_pid = list->processes[*selected_index].pid;
+                 strncpy(kill_confirm_name, list->processes[*selected_index].name, sizeof(kill_confirm_name) - 1);
+                 kill_confirm_name[sizeof(kill_confirm_name) - 1] = '\0';
+                 show_kill_confirm = 1;
+                 kill_confirm_selected = 0; // default to Yes
+                 return ACTION_REDRAW;
             }
             break;
+        case 'M':
+            mem_in_mb = !mem_in_mb;
+            return ACTION_REDRAW;
         case 'm':
             list->sort_mode = SORT_MEM;
             sort_process_list(list);

@@ -10,7 +10,9 @@ a simple terminal process manager for linux, kinda like htop but simpler
 -  real-time updates
 -  multiple color themes (press 't' to cycle through them)
 -  search/filter processes
--  kill processes
+-  popup confirmation for killing processes
+-  toggle memory format (KB/MB)
+-  built-in help menu
 -  vim-style navigation (j/k)
 -  mouse scrolling support
 
@@ -52,7 +54,10 @@ make
 | ESC           | clear filter                          |
 | Enter         | show/hide process details             |
 | 1             | toggle per-core CPU view              |
-| K             | kill selected process (sends SIGTERM) |
+| M             | toggle memory format (KB/MB)          |
+| H             | open/hide help menu                   |
+| K             | kill process (sends SIGKILL with popup)|
+| h / l         | select yes/no in kill popup           |
 
 ## notes
 
@@ -62,7 +67,7 @@ make
 
 ## themes
 
-there's like 10 different color themes (all of them sucks though) :
+there's like 10 different color themes (most of them suck, but Nord and Catppuccin are fixed now) :
 
 -  default (cyan)
 -  dracula
@@ -79,8 +84,8 @@ there's like 10 different color themes (all of them sucks though) :
 
 -  [ ] maybe add network stats?
 -  [ ] tree view for parent/child processes
--  [ ] Toggle Memory format <MB || KB>
--  [ ] conformation to kill specific process
+-  [x] Toggle Memory format <MB || KB>
+-  [x] conformation to kill specific process
 -  [ ] Signal selction
 
 ## license
