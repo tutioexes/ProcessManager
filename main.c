@@ -7,7 +7,8 @@
 #include <unistd.h>
 
 // TODO: network stats?
-// FIXME: selection jumps when filtering? fixed?
+// FIXME: selection jumps when filtering? fixed? ::: FIXED BTW
+// WTF it's sunday again
 
 int main() {
   ProcessList *list = create_process_list();
@@ -37,10 +38,10 @@ int main() {
       needs_redraw = 0;
     }
 
-    ch = getch(); 
+    ch = getch();
 
     if (ch == 'q') {
-      break; 
+      break;
     } else if (ch != ERR || needs_redraw) {
       pid_t saved_pid = -1;
       if (selected_index < list->count) {
@@ -54,11 +55,11 @@ int main() {
 
       static int refresh_counter = 0;
       int refresh_now = (action == ACTION_REFRESH);
-      
+
       if (ch == ERR) {
         if (++refresh_counter > 10) {
-            refresh_now = 1;
-            refresh_counter = 0;
+          refresh_now = 1;
+          refresh_counter = 0;
         }
       }
 
@@ -85,25 +86,34 @@ int main() {
             }
           }
           if (!found) {
-            if (selected_index >= list->count) selected_index = list->count - 1;
-            if (selected_index < 0) selected_index = 0;
+            if (selected_index >= list->count)
+              selected_index = list->count - 1;
+            if (selected_index < 0)
+              selected_index = 0;
           }
         } else {
-          if (selected_index >= list->count) selected_index = list->count - 1;
-          if (selected_index < 0) selected_index = 0;
+          if (selected_index >= list->count)
+            selected_index = list->count - 1;
+          if (selected_index < 0)
+            selected_index = 0;
         }
 
         int h, w;
         getmaxyx(stdscr, h, w);
         int lh = h - 14;
-        if (lh < 1) lh = 1;
+        if (lh < 1)
+          lh = 1;
 
-        if (selected_index < scroll_offset) scroll_offset = selected_index;
-        else if (selected_index >= scroll_offset + lh) scroll_offset = selected_index - lh + 1;
+        if (selected_index < scroll_offset)
+          scroll_offset = selected_index;
+        else if (selected_index >= scroll_offset + lh)
+          scroll_offset = selected_index - lh + 1;
 
-        if (scroll_offset > list->count - lh) scroll_offset = list->count - lh;
-        if (scroll_offset < 0) scroll_offset = 0;
-        
+        if (scroll_offset > list->count - lh)
+          scroll_offset = list->count - lh;
+        if (scroll_offset < 0)
+          scroll_offset = 0;
+
         needs_redraw = 1;
       }
     }
